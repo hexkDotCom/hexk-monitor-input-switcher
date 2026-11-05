@@ -1,0 +1,47 @@
+# Copy to %APPDATA%\monitor-switcher\config.toml on every laptop (same file everywhere).
+# Run `monitor-switcher probe` on each laptop while it's on screen to fill in its values.
+
+[monitor]
+id = "MSI3DD6"          # Windows PnP ID of the monitor, shown by `probe`
+
+# Optional: pick devices by name when more than one keyboard/mouse is found.
+# [devices]
+# keyboard = "K375s"
+# mouse = "M720"
+
+# One [[target]] per laptop. Monitor input, keyboard channel and mouse channel
+# are independent: they don't have to share a number.
+#   monitor:  "hdmi1", "hdmi2", "dp", "usbc" (or a raw VCP 0x60 value like 0x11)
+#   keyboard / mouse: Easy-Switch channel 1-3; leave out to not switch that device
+
+[[target]]
+name = "Laptop A"
+hotkey = "ctrl+alt+shift+1"
+monitor = "hdmi1"
+keyboard = 1
+mouse = 1
+
+[[target]]
+name = "Laptop B"
+hotkey = "ctrl+alt+shift+2"
+monitor = "dp"
+keyboard = 2
+mouse = 2
+
+[[target]]
+name = "Laptop C"
+hotkey = "ctrl+alt+shift+3"
+monitor = "usbc"        # USB-C upstream of the monitor's KVM
+keyboard = 3            # receiver plugged into the monitor's USB hub
+mouse = 3
+
+[[target]]
+name = "Laptop D"
+hotkey = "ctrl+alt+shift+4"
+monitor = "hdmi2"       # plus a USB-B cable to the monitor's KVM
+keyboard = 3            # same hub receiver: C <-> D only switches the monitor
+mouse = 3
+
+[hotkeys]
+next = "ctrl+alt+shift+right"
+prev = "ctrl+alt+shift+left"
