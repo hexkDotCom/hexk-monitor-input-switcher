@@ -109,26 +109,127 @@ def test_transport_routes_reports_to_matching_collection():
     assert transport.read(1) is None
 
 
-def test_open_devices_retries_idle_bluetooth_device(monkeypatch):
-    class FakeHid:
-        class device:
-            def open_path(self, path):
-                pass
+class FakeLink:
+    """One HID endpoint as hidapi sees it: a Bluetooth K375s by default.
 
-            def close(self):
-                pass
+    `drop` requests go unanswered (an idle link); `dead` fails every write
+    (a device paired to Windows but connected elsewhere).
+    """
+
+    def __init__(self, features=None, drop=0, dead=False):
+        self.features = {0x0005: 0x03, 0x1814: 0x08} if features is None else features
+        self.drop, self.dead = drop, dead
+        self.requests: list[bytes] = []
+        self.pending: list[bytes] = []
+
+    def write(self, data):
+        if self.dead:
+            return -1
+        data = bytes(data)
+        self.requests.append(data)
+        if self.drop:
+            self.drop -= 1
+            return len(data)
+        feature_index, function = data[2], data[3] >> 4
+        if feature_index == 0x00:
+            params = bytes([self.features.get(int.from_bytes(data[4:6], "big"), 0)])
+        elif (feature_index, function) == (0x03, 0):
+            params = bytes([5])
+        elif (feature_index, function) == (0x03, 1):
+            params = b"K375s"[data[4] :]
+        elif (feature_index, function) == (0x03, 2):
+            params = bytes([0])  # keyboard
+        elif (feature_index, function) == (0x08, 0):
+            params = bytes([3, 0])  # 3 channels, on channel 1
+        else:
+            return len(data)
+        self.pending.append((data[:4] + params).ljust(20, b"\0"))
+        return len(data)
+
+    def read(self, size, timeout_ms):
+        return list(self.pending.pop(0)) if self.pending else []
+
+
+def fake_hid(endpoints):
+    """A stand-in for the `hid` module serving {path: (usage_page, usage, FakeLink)}."""
+
+    class Handle:
+        def open_path(self, path):
+            self.link = endpoints[path][2]
+
+        def write(self, data):
+            return self.link.write(data)
+
+        def read(self, size, timeout_ms):
+            return self.link.read(size, timeout_ms)
+
+        def close(self):
+            pass
+
+    class Hid:
+        device = Handle
 
         @staticmethod
         def enumerate(vid):
-            return [{"path": b"bt-kb", "usage_page": 0xFF43, "usage": 0x0202}]
+            return [{"path": p, "usage_page": e[0], "usage": e[1]} for p, e in endpoints.items()]
 
-    kb = device("K375s", "keyboard")
-    answers = [None, kb]  # asleep on the first request, awake on the second
-    monkeypatch.setitem(sys.modules, "hid", FakeHid)
+    return Hid
+
+
+@pytest.fixture
+def quick(monkeypatch):
     monkeypatch.setattr(devices, "WAKE_RETRY_DELAY", 0)
-    monkeypatch.setattr(devices, "_probe", lambda transport, index, link: answers.pop(0))
+    monkeypatch.setattr(devices, "REQUEST_TIMEOUT", 0.05)
+
+
+def discover(monkeypatch, endpoints):
+    monkeypatch.setitem(sys.modules, "hid", fake_hid(endpoints))
     with devices.open_devices() as found:
-        assert found == [kb]
+        return found
+
+
+def feature_lookups(link):
+    """How often the CHANGE_HOST feature was looked up, i.e. probe attempts."""
+    return sum(1 for r in link.requests if r[2] == 0x00 and r[4:6] == b"\x18\x14")
+
+
+def test_idle_bluetooth_keyboard_is_found_on_the_second_try(monkeypatch, quick):
+    link = FakeLink(drop=1)  # misses the first request, as the K375s does when idle
+    found = discover(monkeypatch, {b"bt-kb": (0xFF43, 0x0202, link)})
+    assert [(d.name, d.role, d.link, d.current) for d in found] == [
+        ("K375s", "keyboard", "bluetooth", 0)
+    ]
+    assert feature_lookups(link) == 2
+
+
+def test_bluetooth_device_without_easy_switch_is_not_retried(monkeypatch, quick):
+    link = FakeLink(features={0x0005: 0x03})
+    assert discover(monkeypatch, {b"bt-other": (0xFF43, 0x0202, link)}) == []
+    assert feature_lookups(link) == 1
+
+
+def test_unreachable_bluetooth_device_does_not_stop_discovery(monkeypatch, quick):
+    found = discover(
+        monkeypatch,
+        {
+            b"bt-gone": (0xFF43, 0x0202, FakeLink(dead=True)),
+            b"bt-kb": (0xFF43, 0x0202, FakeLink()),
+        },
+    )
+    assert [d.name for d in found] == ["K375s"]
+
+
+def test_unreachable_receiver_does_not_stop_discovery(monkeypatch, quick):
+    dead = FakeLink(dead=True)
+    found = discover(
+        monkeypatch,
+        {
+            rb"\\?\HID#VID_046D&PID_C52B&MI_02&Col01#8&1a2b3c4d&0&0000#{x}": (0xFF00, 1, dead),
+            rb"\\?\HID#VID_046D&PID_C52B&MI_02&Col02#8&1a2b3c4d&0&0001#{x}": (0xFF00, 2, dead),
+            b"bt-kb": (0xFF43, 0x0202, FakeLink()),
+        },
+    )
+    assert [d.name for d in found] == ["K375s"]
 
 
 def test_collection_key_pairs_short_and_long_collections():

@@ -38,6 +38,7 @@ UNIFYING_KINDS = {1: "keyboard", 2: "mouse", 8: "mouse", 9: "mouse"}
 
 OFFLINE_NOTE = "not responding: asleep, or switched to another computer"
 WAKE_RETRY_DELAY = 0.3
+REQUEST_TIMEOUT = 0.5  # per HID++ request while probing
 
 
 @dataclass
@@ -181,22 +182,20 @@ def open_devices() -> Iterator[list[LogiDevice]]:
                 continue
             transport = HidTransport(long_handle, short_handle)
             if kind == "bluetooth":
-                device = _probe(transport, DIRECT_INDEX, "bluetooth")
-                if device is None:
-                    # An idle Bluetooth link (e.g. the K375s) misses the first request.
-                    time.sleep(WAKE_RETRY_DELAY)
-                    device = _probe(transport, DIRECT_INDEX, "bluetooth")
+                # An idle Bluetooth link (e.g. the K375s) misses the first request.
+                device = _probe(transport, DIRECT_INDEX, "bluetooth", wake=True)
                 if device:
                     devices.append(device)
                 continue
-            pairings = receiver_pairings(transport) if short_handle else None
+            try:
+                pairings = receiver_pairings(transport) if short_handle else None
+            except OSError as e:
+                log.debug("receiver %s: %s", long_path, e)
+                continue
             for slot in sorted(pairings) if pairings is not None else RECEIVER_SLOTS:
                 link = f"receiver slot {slot}"
-                device = _probe(transport, slot, link)
-                if device is None and pairings and slot in pairings:
-                    # A sleeping device often answers once the first request woke it.
-                    time.sleep(WAKE_RETRY_DELAY)
-                    device = _probe(transport, slot, link)
+                # A paired device that's asleep often answers once the first request woke it.
+                device = _probe(transport, slot, link, wake=bool(pairings))
                 if device:
                     devices.append(device)
                 elif pairings and slot in pairings:
@@ -205,18 +204,32 @@ def open_devices() -> Iterator[list[LogiDevice]]:
         yield devices
 
 
-def _probe(transport: HidTransport, index: int, link: str) -> LogiDevice | None:
-    hidpp = HidppDevice(transport, index)
-    try:
-        if hidpp.feature_index(FEATURE_CHANGE_HOST) is None:
+def _probe(transport: HidTransport, index: int, link: str, wake: bool = False) -> LogiDevice | None:
+    """Identify the Easy-Switch device at `index`; None if there is none or it's unreachable.
+
+    With `wake`, a device that didn't answer (or answered with an error) gets
+    one more try: an idle link often misses the first request. A definite
+    answer (no Easy-Switch feature) or a dead link (I/O error) is not retried.
+    """
+    for attempt in (1, 2):
+        hidpp = HidppDevice(transport, index, timeout=REQUEST_TIMEOUT)
+        try:
+            if hidpp.feature_index(FEATURE_CHANGE_HOST) is None:
+                return None
+            hosts, current = hidpp.host_info()
+            name = hidpp.name()
+            role = _classify(hidpp.kind())
+        except (HidppTimeout, HidppError) as e:
+            log.debug("%s: %s", link, e)
+            if wake and attempt == 1:
+                time.sleep(WAKE_RETRY_DELAY)
+                continue
             return None
-        hosts, current = hidpp.host_info()
-        name = hidpp.name()
-        role = _classify(hidpp.kind())
-    except (HidppError, HidppTimeout, FeatureMissing) as e:
-        log.debug("%s: %s", link, e)
-        return None
-    return LogiDevice(name, role, link, hosts, current, hidpp)
+        except (FeatureMissing, OSError) as e:  # OSError: write/read failed, link is gone
+            log.debug("%s: %s", link, e)
+            return None
+        return LogiDevice(name, role, link, hosts, current, hidpp)
+    return None
 
 
 def pick(devices: list[LogiDevice], role: str, name_filter: str | None) -> LogiDevice:
