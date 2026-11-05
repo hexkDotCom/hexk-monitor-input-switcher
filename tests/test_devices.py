@@ -1,5 +1,8 @@
+import sys
+
 import pytest
 
+from monitor_switcher import devices
 from monitor_switcher.devices import (
     HidTransport,
     LogiDevice,
@@ -104,6 +107,28 @@ def test_transport_routes_reports_to_matching_collection():
     assert [r[0] for r in short_h.written] == [0x10]
     assert [r[0] for r in long_h.written] == [0x11]
     assert transport.read(1) is None
+
+
+def test_open_devices_retries_idle_bluetooth_device(monkeypatch):
+    class FakeHid:
+        class device:
+            def open_path(self, path):
+                pass
+
+            def close(self):
+                pass
+
+        @staticmethod
+        def enumerate(vid):
+            return [{"path": b"bt-kb", "usage_page": 0xFF43, "usage": 0x0202}]
+
+    kb = device("K375s", "keyboard")
+    answers = [None, kb]  # asleep on the first request, awake on the second
+    monkeypatch.setitem(sys.modules, "hid", FakeHid)
+    monkeypatch.setattr(devices, "WAKE_RETRY_DELAY", 0)
+    monkeypatch.setattr(devices, "_probe", lambda transport, index, link: answers.pop(0))
+    with devices.open_devices() as found:
+        assert found == [kb]
 
 
 def test_collection_key_pairs_short_and_long_collections():

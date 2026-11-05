@@ -182,6 +182,10 @@ def open_devices() -> Iterator[list[LogiDevice]]:
             transport = HidTransport(long_handle, short_handle)
             if kind == "bluetooth":
                 device = _probe(transport, DIRECT_INDEX, "bluetooth")
+                if device is None:
+                    # An idle Bluetooth link (e.g. the K375s) misses the first request.
+                    time.sleep(WAKE_RETRY_DELAY)
+                    device = _probe(transport, DIRECT_INDEX, "bluetooth")
                 if device:
                     devices.append(device)
                 continue
