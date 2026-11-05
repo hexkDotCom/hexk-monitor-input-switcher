@@ -37,11 +37,11 @@ by vendor; any raw VCP value can go in the config.
 Requires Windows 10/11 and Python 3.11+ (a per-user install is fine).
 
 ```bash
-git clone <this repository> monitor-switcher
+git clone https://github.com/hexkDotCom/hexk-monitor-input-switcher.git
 ```
 
 ```bash
-cd monitor-switcher
+cd hexk-monitor-input-switcher
 ```
 
 ```bash

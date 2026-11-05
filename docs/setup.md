@@ -128,8 +128,9 @@ it.
 ## 6. Install monitor-switcher
 
 Put the tool in a folder that won't move, for example
-`%USERPROFILE%\Tools\monitor-switcher`. Clone the repository, or download it
-as a ZIP and extract it there.
+`%USERPROFILE%\Tools\monitor-switcher`. Clone
+<https://github.com/hexkDotCom/hexk-monitor-input-switcher> there, or
+download it as a ZIP (green **Code** button > **Download ZIP**) and extract it.
 
 Then create its environment. Pick **one** option and use it on every laptop.
 
